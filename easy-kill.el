@@ -1,9 +1,10 @@
 ;;; easy-kill.el --- kill & mark things easily       -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2013-2014  Free Software Foundation, Inc.
+;; Copyright (C) 2013-2018  Free Software Foundation, Inc.
 
 ;; Author: Leo Liu <sdl.web@gmail.com>
-;; Version: 0.9.3
+;; Version: 0.9.4
+;; Package-Type: simple
 ;; Package-Requires: ((emacs "24") (cl-lib "0.5"))
 ;; Keywords: killing, convenience
 ;; Created: 2013-08-12
@@ -41,6 +42,7 @@
 
 (require 'cl-lib)
 (require 'thingatpt)
+(require 'gv nil t)                     ;For `defsetf'.
 (eval-when-compile (require 'cl))       ;For `defsetf'.
 
 (eval-and-compile
@@ -70,12 +72,13 @@
         (add-hook 'pre-command-hook clearfunsym)
         (push alist emulation-mode-map-alists))))))
 
-(defcustom easy-kill-alist '((?w word     " ")
-                             (?s sexp     "\n")
-                             (?l list     "\n")
-                             (?f filename "\n")
-                             (?d defun    "\n\n")
-                             (?e line     "\n")
+(defcustom easy-kill-alist '((?w word           " ")
+                             (?s sexp           "\n")
+                             (?l list           "\n")
+                             (?f filename       "\n")
+                             (?d defun          "\n\n")
+                             (?D defun-name     " ")
+                             (?e line           "\n")
                              (?b buffer-file-name))
   "A list of (CHAR THING APPEND).
 CHAR is used immediately following `easy-kill' to select THING.
@@ -86,6 +89,16 @@ Note: each element can also be (CHAR . THING) but this is
 deprecated."
   :type '(repeat (list character symbol
                        (choice string (const :tag "None" nil))))
+  :group 'killing)
+
+(defcustom easy-kill-cycle-ignored nil
+  "A list of things that `easy-kill-cycle' should ignore."
+  :type '(repeat symbol)
+  :group 'killing)
+
+(defcustom easy-kill-unhighlight-key nil
+  "Key sequence if non-nil to unhighlight the kill candidate."
+  :type '(choice (const :tag "None" nil) key-sequence)
   :group 'killing)
 
 (defcustom easy-kill-try-things '(url email line)
@@ -111,11 +124,13 @@ deprecated."
     (define-key map "-" 'easy-kill-shrink)
     (define-key map "+" 'easy-kill-expand)
     (define-key map "=" 'easy-kill-expand)
+    (define-key map " " 'easy-kill-cycle)
     (define-key map "@" 'easy-kill-append)
     ;; Note: didn't pick C-h because it is a very useful prefix key.
     (define-key map "?" 'easy-kill-help)
     (define-key map [remap set-mark-command] 'easy-kill-mark-region)
     (define-key map [remap kill-region] 'easy-kill-region)
+    (define-key map [remap delete-region] 'easy-kill-delete-region)
     (define-key map [remap keyboard-quit] 'easy-kill-abort)
     (define-key map [remap exchange-point-and-mark]
       'easy-kill-exchange-point-and-mark)
@@ -125,6 +140,13 @@ deprecated."
     map))
 
 (defvar easy-kill-inhibit-message nil)
+
+(defmacro easy-kill-defun (name arglist &optional docstring &rest body)
+  "Like `defun' but NAME has property `easy-kill-exit' set to t.
+\n\n(fn NAME ARGLIST &optional DOCSTRING DECL &rest BODY)"
+  (declare (doc-string 3) (indent defun))
+  `(progn (put ',name 'easy-kill-exit t)
+          (defun ,name ,arglist ,docstring ,@body)))
 
 (defun easy-kill-echo (format-string &rest args)
   "Same as `message' except not writing to *Messages* buffer.
@@ -171,6 +193,9 @@ The value is the function's symbol if non-nil."
   "Build the keymap according to `easy-kill-alist'."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map easy-kill-base-map)
+    (when easy-kill-unhighlight-key
+      (with-demoted-errors "easy-kill-unhighlight-key: %S"
+        (define-key map easy-kill-unhighlight-key 'easy-kill-unhighlight)))
     (mapc (lambda (c)
             ;; (define-key map (vector meta-prefix-char c) 'easy-kill-select)
             (define-key map (char-to-string c) 'easy-kill-thing))
@@ -339,10 +364,10 @@ candidate property instead."
           (interprogram-paste-function nil))
       (kill-new (if (and (easy-kill-get append) kill-ring)
                     (cl-labels ((join (x sep y)
-                                      (if sep (concat (easy-kill-trim x 'right)
-                                                      sep
-                                                      (easy-kill-trim y 'left))
-                                        (concat x y))))
+                                  (if sep (concat (easy-kill-trim x 'right)
+                                                  sep
+                                                  (easy-kill-trim y 'left))
+                                    (concat x y))))
                       (join (car kill-ring)
                             (nth 2 (cl-rassoc (easy-kill-get thing)
                                               easy-kill-alist :key #'car))
@@ -367,6 +392,30 @@ candidate property instead."
 (defun easy-kill-expand ()
   (interactive)
   (easy-kill-thing nil '+))
+
+(defun easy-kill-cycle (&optional thing)
+  "Cycle through things in `easy-kill-alist'.
+A thing is opted out of cycling if in `easy-kill-cycle-ignored'."
+  (interactive)
+  (let ((next (easy-kill-cycle-next (or thing (easy-kill-get thing))
+                                    (length easy-kill-cycle-ignored))))
+    (easy-kill-thing next)
+    (if (eq next (easy-kill-get thing))
+        (easy-kill-echo "%s" next)
+      ;; NEXT not killable continue cycle.
+      (easy-kill-cycle next))))
+
+(defun easy-kill-cycle-next (thing depth)
+  (cl-flet ((thing-name (thing)
+              (if (symbolp (cdr thing)) (cdr thing) (cl-second thing))))
+    (let ((next (thing-name
+                 (car (or (cl-loop for (head . tail) on easy-kill-alist
+                                   when (eq thing (thing-name head))
+                                   return tail)
+                          easy-kill-alist)))))
+      (cond ((not (memq next easy-kill-cycle-ignored)) next)
+            ((> depth 0) (easy-kill-cycle-next next (1- depth)))
+            (t (user-error "Nothing to cycle"))))))
 
 (defun easy-kill-digit-argument (n)
   "Expand selection by N number of things.
@@ -402,11 +451,19 @@ checked."
 
 (defun easy-kill-bounds-of-thing-at-point (thing)
   "Easy Kill wrapper for `bounds-of-thing-at-point'."
-  (pcase (easy-kill-thing-handler
-          (format "easy-kill-bounds-of-%s-at-point" thing)
-          major-mode)
-    ((and (pred functionp) fn) (funcall fn))
-    (_ (bounds-of-thing-at-point thing))))
+  ;; Work around a bug (fixed in 25.1, commit: 7a94f28a) in
+  ;; `thing-at-point-bounds-of-url-at-point' that could return a
+  ;; boundary not containing current point.
+  (cl-flet ((chk (bound)
+              (pcase-let ((`(,b . ,e) bound))
+                (and b e
+                     (<= b (point)) (<= (point) e)
+                     (cons b e)))))
+    (pcase (easy-kill-thing-handler
+            (format "easy-kill-bounds-of-%s-at-point" thing)
+            major-mode)
+      ((and (pred functionp) fn) (chk (funcall fn)))
+      (_ (chk (bounds-of-thing-at-point thing))))))
 
 (defun easy-kill-thing-forward-1 (thing &optional n)
   "Easy Kill wrapper for `forward-thing'."
@@ -474,8 +531,7 @@ checked."
     (when (easy-kill-get mark)
       (easy-kill-adjust-candidate (easy-kill-get thing)))))
 
-(put 'easy-kill-abort 'easy-kill-exit t)
-(defun easy-kill-abort ()
+(easy-kill-defun easy-kill-abort ()
   (interactive)
   (when (easy-kill-get mark)
     ;; The after-string may interfere with `goto-char'.
@@ -484,16 +540,14 @@ checked."
     (setq deactivate-mark t))
   (ding))
 
-(put 'easy-kill-region 'easy-kill-exit t)
-(defun easy-kill-region ()
+(easy-kill-defun easy-kill-region ()
   "Kill current selection and exit."
   (interactive "*")
   (pcase (easy-kill-get bounds)
     (`(,_x . ,_x) (easy-kill-echo "Empty region"))
     (`(,beg . ,end) (kill-region beg end))))
 
-(put 'easy-kill-mark-region 'easy-kill-exit t)
-(defun easy-kill-mark-region ()
+(easy-kill-defun easy-kill-mark-region ()
   (interactive)
   (pcase (easy-kill-get bounds)
     (`(,_x . ,_x)
@@ -508,19 +562,29 @@ checked."
 
 (defun easy-kill-exchange-point-and-mark ()
   (interactive)
-  (exchange-point-and-mark)
-  (setf (easy-kill-get mark)
-        (if (eq (point) (easy-kill-get start))
-            'end 'start)))
+  (when (easy-kill-get mark)
+    (exchange-point-and-mark)
+    (setf (easy-kill-get mark)
+          (if (eq (point) (easy-kill-get start))
+              'end 'start))))
 
-(put 'easy-kill-append 'easy-kill-exit t)
-(defun easy-kill-append ()
+(easy-kill-defun easy-kill-append ()
   (interactive)
   (setf (easy-kill-get append) t)
   (when (easy-kill-save-candidate)
     (easy-kill-interprogram-cut (car kill-ring))
     (setq deactivate-mark t)
     (easy-kill-echo "Appended")))
+
+(easy-kill-defun easy-kill-delete-region ()
+  (interactive)
+  (pcase (easy-kill-get bounds)
+    (`(,beg . ,end) (delete-region beg end))))
+
+(easy-kill-defun easy-kill-unhighlight ()
+  (interactive)
+  (and (easy-kill-save-candidate)
+       (easy-kill-echo "`%s' copied" (easy-kill-get thing))))
 
 (defun easy-kill-exit-p (cmd)
   (and (symbolp cmd) (get cmd 'easy-kill-exit)))
@@ -557,6 +621,7 @@ Temporally activate additional key bindings as follows:
   @       => append selection to previous kill;
   ?       => help;
   C-w     => kill selection;
+  SPC     => cycle through things in `easy-kill-alist';
   C-SPC   => turn selection into an active region;
   C-g     => abort;
   others  => save selection and exit."
@@ -625,11 +690,11 @@ inspected."
   (if (or (easy-kill-get mark) (easy-kill-bounds-of-thing-at-point 'url))
       (easy-kill-thing 'url nil t)
     (cl-labels ((get-url (text)
-                         (when (stringp text)
-                           (with-temp-buffer
-                             (insert text)
-                             (pcase (easy-kill-bounds-of-thing-at-point 'url)
-                               (`(,beg . ,end) (buffer-substring beg end)))))))
+                  (when (stringp text)
+                    (with-temp-buffer
+                      (insert text)
+                      (pcase (easy-kill-bounds-of-thing-at-point 'url)
+                        (`(,beg . ,end) (buffer-substring beg end)))))))
       (cl-dolist (p '(help-echo shr-url w3m-href-anchor))
         (pcase (get-char-property-and-overlay (point) p)
           (`(,text . ,ov)

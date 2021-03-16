@@ -82,6 +82,18 @@
     (call-interactively #'easy-kill-append)
     (should (string= (car kill-ring) "abc"))))
 
+(ert-deftest test-easy-kill-delete-region ()
+  (with-temp-buffer
+    (insert "abc def ghi")
+    (backward-word 2)
+    (kill-new "test")
+    (easy-kill)
+    (easy-kill-thing 'word)
+    (call-interactively #'easy-kill-delete-region)
+    (should (string= (car kill-ring) "test"))
+    (should (string= (buffer-substring-no-properties (point-min) (point)) "abc "))
+    (should (string= (buffer-substring-no-properties (point) (point-max)) " ghi"))))
+
 ;;; Make sure the old format of easy-kill-alist is still supported.
 (ert-deftest test-old-easy-kill-alist ()
   (let ((easy-kill-alist '((?w . word)
@@ -294,7 +306,8 @@ This is an example of org document.
   + Porsche
 "))
     (with-temp-buffer
-      (org-mode)
+      ;; http://debbugs.gnu.org/17724
+      (ignore-errors (org-mode))
       (insert org)
       (goto-char (point-min))
       (search-forward "This is")
@@ -429,5 +442,26 @@ some of the ways to customize it;
       (easy-kill-shrink)
       (should (= (mark t) (easy-kill-get start)))
       (should (= (point) (easy-kill-get end))))))
+
+(ert-deftest test-easy-kill-cycle ()
+  (let ((easy-kill-alist '((?w word) (?s sexp))))
+   (with-temp-buffer
+     (insert "a@example.com")
+     (call-interactively 'easy-kill)
+     (should (eq 'email (easy-kill-get thing)))
+
+     (call-interactively 'easy-kill-cycle)
+     (should (eq 'word (easy-kill-get thing)))
+     (call-interactively 'easy-kill-cycle)
+     (should (eq 'sexp (easy-kill-get thing)))
+     (call-interactively 'easy-kill-cycle)
+     (should (eq 'word (easy-kill-get thing)))
+
+     (let ((easy-kill-cycle-ignored '(sexp)))
+       (call-interactively 'easy-kill-cycle))
+     (should (eq 'word (easy-kill-get thing)))
+
+     (let ((easy-kill-cycle-ignored '(word sexp)))
+       (should-error (call-interactively 'easy-kill-cycle))))))
 
 ;;; test.el ends here
