@@ -97,6 +97,14 @@ convention, or by defining new functions named like
 NEWS
 ~~~~
 
+0.9.5
++++++
+
+#. [BREAKING] Emacs >= 25 required.
+#. [BREAKING] Remove deprecated format for ``easy-kill-alist``.
+#. Include ``uuid`` in ``easy-kill-try-things`` and
+   ``easy-mark-try-things``.
+
 0.9.4
 +++++
 
