@@ -1,2 +1,2 @@
 ;; Generated package description from easy-kill.el  -*- no-byte-compile: t -*-
-(define-package "easy-kill" "0.9.5.0.20260112.113033" "kill & mark things easily" '((emacs "25") (cl-lib "0.5")) :commit "3401ab7427e34f8913374311bf75d342462fc9b0" :authors '(("Leo Liu" . "sdl.web@gmail.com")) :maintainer '("Leo Liu" . "sdl.web@gmail.com") :keywords '("killing" "convenience") :url "https://github.com/leoliu/easy-kill")
+(define-package "easy-kill" "0.9.5.0.20260121.75216" "kill & mark things easily" '((emacs "25") (cl-lib "0.5")) :commit "98cbae5d8c378ad14d612d7c88a78484c49a80b8" :authors '(("Leo Liu" . "sdl.web@gmail.com")) :maintainer '("Leo Liu" . "sdl.web@gmail.com") :keywords '("killing" "convenience") :url "https://github.com/leoliu/easy-kill")
